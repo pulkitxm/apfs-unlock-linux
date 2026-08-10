@@ -1,4 +1,4 @@
-# wd-unlock
+# apfs-unlock-linux
 
 Unlock a hardware-encrypted SanDisk Extreme Pro (or WD My Passport) on Linux
 and mount its APFS volume, optionally automatically on plug-in.
@@ -33,8 +33,8 @@ sudo apt install git build-essential openssl mokutil python3-venv \
 ## Setup
 
 ```
-git clone <this repo> wd-unlock
-cd wd-unlock
+git clone https://github.com/pulkitxm/apfs-unlock-linux.git
+cd apfs-unlock-linux
 cp .env.example .env
 chmod 600 .env
 ```
