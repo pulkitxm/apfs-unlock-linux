@@ -1,0 +1,2 @@
+pyudev==0.24.4
+git+https://github.com/crypto-universe/py_sg
