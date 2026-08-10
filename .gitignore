@@ -1,0 +1,15 @@
+.env
+
+mok/
+venv/
+linux-apfs-rw/
+
+*.orig
+*.rej
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+Module.symvers
+modules.order
