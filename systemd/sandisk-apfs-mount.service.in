@@ -1,0 +1,11 @@
+[Unit]
+Description=Unlock and mount SanDisk Extreme Pro (APFS)
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+Environment=SUDO_UID=@UID@
+Environment=SUDO_GID=@GID@
+ExecStart=@DIR@/apfs-mount.sh mount
+TimeoutStartSec=180

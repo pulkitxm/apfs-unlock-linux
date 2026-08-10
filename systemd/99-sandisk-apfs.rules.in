@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ENV{ID_SERIAL}=="@SERIAL@", TAG+="systemd", ENV{SYSTEMD_WANTS}+="sandisk-apfs-mount.service"
