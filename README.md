@@ -121,8 +121,8 @@ so no second reboot dance.
 
 ## Pinning the driver version
 
-`setup-apfs.sh` checks out tag `0.3.20` by default. Override with
-`APFS_VERSION=0.3.21 sudo -E ./setup-apfs.sh`.
+`setup-apfs.sh` checks out tag `v0.3.20` by default. Override with
+`APFS_VERSION=v0.3.21 sudo -E ./setup-apfs.sh`.
 
 ## Licensing
 

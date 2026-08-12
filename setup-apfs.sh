@@ -9,7 +9,7 @@ MOKDIR="${DIR}/mok"
 VENV="${DIR}/venv"
 
 APFS_REPO="${APFS_REPO:-https://github.com/linux-apfs/linux-apfs-rw.git}"
-APFS_VERSION="${APFS_VERSION:-0.3.20}"
+APFS_VERSION="${APFS_VERSION:-v0.3.20}"
 SIGN_FILE="/usr/src/linux-headers-${KVER}/scripts/sign-file"
 
 if [[ $EUID -ne 0 ]]; then
