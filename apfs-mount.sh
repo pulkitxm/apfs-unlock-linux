@@ -38,10 +38,20 @@ load_config() {
 		exit 1
 	fi
 
+	local ro_override_set=0 ro_override=
+	if [[ -n "${APFS_READONLY+x}" ]]; then
+		ro_override_set=1
+		ro_override="${APFS_READONLY}"
+	fi
+
 	set -a
 	# shellcheck disable=SC1090
 	source "$ENV_FILE"
 	set +a
+
+	if ((ro_override_set)); then
+		APFS_READONLY="${ro_override}"
+	fi
 
 	: "${DRIVE_SERIAL:?DRIVE_SERIAL is not set in ${ENV_FILE}}"
 	: "${WDPASSPORT_PASSWORD:?WDPASSPORT_PASSWORD is not set in ${ENV_FILE}}"
@@ -103,7 +113,6 @@ do_umount() {
 
 	red "Target is busy. Processes or shells using ${MNT}:"
 	fuser -vm "$MNT" 2>&1 | sed 's/^/    /' || true
-	lsof +D "$MNT" 2>/dev/null | head -10 | sed 's/^/    /' || true
 	red "Close those (a terminal sitting in ${MNT} counts), then retry."
 	red "Or force it with a lazy unmount: sudo umount -l ${MNT}"
 	return 1
@@ -141,9 +150,16 @@ do_mount() {
 
 	clear_stale_mount || true
 	if is_mounted; then
-		green "Already mounted at ${MNT}, nothing to do."
-		df -h "$MNT" | tail -1
-		return 0
+		local cur
+		cur="$(findmnt -no OPTIONS "$MNT" 2>/dev/null || true)"
+		if [[ "${APFS_READONLY:-0}" != "1" ]] && [[ ",${cur}," == *",ro,"* || "${cur}" == ro,* ]]; then
+			info "Mounted read-only but writes were requested; remounting."
+			do_umount || { red "Could not unmount ${MNT} to remount read-write."; exit 1; }
+		else
+			green "Already mounted at ${MNT}, nothing to do."
+			df -h "$MNT" | tail -1
+			return 0
+		fi
 	fi
 
 	if ! wait_for "$DISK_LINK"; then
@@ -170,11 +186,8 @@ do_mount() {
 			exit 1
 		fi
 	fi
-	local part
-	part="$(readlink -f "$PART_LINK")"
-	green "Partition ready: ${part}"
 
-	local opts uid gid
+	local part opts uid gid attempt
 	uid="${SUDO_UID:-0}"
 	gid="${SUDO_GID:-0}"
 	opts="uid=${uid},gid=${gid}"
@@ -186,15 +199,34 @@ do_mount() {
 	fi
 
 	mkdir -p "$MNT"
-	info "Mounting ${part} -> ${MNT} (-o ${opts}) ..."
-	if ! mount -t apfs -o "$opts" "$part" "$MNT"; then
-		red "Mount failed. Retry read-only to at least get your data:"
-		red "  sudo APFS_READONLY=1 $0 mount"
-		exit 1
-	fi
+	for attempt in 1 2 3 4 5; do
+		udevadm settle || true
+		if ! wait_for "$PART_LINK"; then
+			sleep 0.5
+			continue
+		fi
+		part="$(readlink -f "$PART_LINK")"
+		[[ -b "$part" ]] || { sleep 0.5; continue; }
+		green "Partition ready: ${part}"
+		info "Mounting ${part} -> ${MNT} (-o ${opts}) ..."
+		if mount -t apfs -o "$opts" "$part" "$MNT"; then
+			break
+		fi
+		if ((attempt == 5)); then
+			red "Mount failed. Retry read-only to at least get your data:"
+			red "  sudo APFS_READONLY=1 $0 mount"
+			exit 1
+		fi
+		info "Mount attempt ${attempt} failed, retrying ..."
+		sleep 0.5
+	done
 
 	green "Mounted at ${MNT}"
 	df -h "$MNT" | tail -1
+
+	if [[ "${APFS_READONLY:-0}" != "1" ]]; then
+		sleep 2
+	fi
 
 	local actual
 	actual="$(findmnt -no OPTIONS "$MNT" 2>/dev/null)"
@@ -205,6 +237,7 @@ do_mount() {
 		else
 			red "Mounted READ-ONLY even though writes were requested."
 			red "Check: sudo dmesg | grep -i apfs"
+			exit 1
 		fi
 	else
 		green "Mounted READ-WRITE (experimental). Test with a scratch file first."
