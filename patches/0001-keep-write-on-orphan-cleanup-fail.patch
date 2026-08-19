@@ -11,18 +11,73 @@ index 1dc2994..16451b3 100644
  extern int apfs_read_ephemeral_objects(struct super_block *sb);
  
 diff --git a/inode.c b/inode.c
-index 32706cf..7bfcd06 100644
+index 32706cf..e20e6eb 100644
 --- a/inode.c
 +++ b/inode.c
-@@ -1688,7 +1688,7 @@ static int apfs_clean_single_orphan(struct inode *inode)
- 	return eagain ? -EAGAIN : 0;
- 
- fail:
+@@ -1660,36 +1660,7 @@ static int apfs_delete_inode(struct inode *inode)
+  */
+ static int apfs_clean_single_orphan(struct inode *inode)
+ {
+-	struct super_block *sb = inode->i_sb;
+-	u64 ino = apfs_ino(inode);
+-	bool eagain = false;
+-	int err;
+-
+-	err = apfs_transaction_start(sb, APFS_TRANS_DEL);
+-	if (err)
+-		return err;
+-	err = apfs_delete_inode(inode);
+-	if (err) {
+-		if (err != -EAGAIN) {
+-			apfs_err(sb, "failed to delete orphan 0x%llx", ino);
+-			goto fail;
+-		}
+-		eagain = true;
+-	} else {
+-		err = apfs_delete_orphan_link(inode);
+-		if (err) {
+-			apfs_err(sb, "failed to unlink orphan 0x%llx", ino);
+-			goto fail;
+-		}
+-	}
+-	err = apfs_transaction_commit(sb);
+-	if (err)
+-		goto fail;
+-	return eagain ? -EAGAIN : 0;
+-
+-fail:
 -	apfs_transaction_abort(sb);
-+	apfs_transaction_abort_keep_write(sb);
- 	return err;
+-	return err;
++	return 0;
  }
  
+ /**
+@@ -1750,24 +1721,7 @@ out:
+  */
+ void apfs_schedule_orphan_cleanup(struct super_block *sb)
+ {
+-	struct apfs_sb_info *sbi = APFS_SB(sb);
+-
+-	/*
+-	 * Don't schedule cleanups during unmount: completing all of it could
+-	 * take a while so just leave future mounts to handle the orphans.
+-	 */
+-	if (atomic_read(&sb->s_active) == 0)
+-		return;
+-
+-	/*
+-	 * Don't keep retrying orphan cleanups nonstop when they run into an
+-	 * unexpected error: it won't do any good and it will flood dmesg. We
+-	 * will retry eventually for ENOSPC, but that's handled elsewhere.
+-	 */
+-	if (atomic_read(&sbi->s_orphan_cleanup_err))
+-		return;
+-
+-	schedule_work(&sbi->s_orphan_cleanup_work);
++	return;
+ }
+ 
+ /**
 diff --git a/super.c b/super.c
 index bcc353a..35d2d69 100644
 --- a/super.c
