@@ -1,0 +1,107 @@
+diff --git a/apfs.h b/apfs.h
+index 1dc2994..16451b3 100644
+--- a/apfs.h
++++ b/apfs.h
+@@ -1176,6 +1176,7 @@ extern void apfs_inode_join_transaction(struct super_block *sb, struct inode *in
+ extern int apfs_transaction_join(struct super_block *sb,
+ 				 struct buffer_head *bh);
+ void apfs_transaction_abort(struct super_block *sb);
++void apfs_transaction_abort_keep_write(struct super_block *sb);
+ extern int apfs_transaction_flush_all_inodes(struct super_block *sb);
+ extern int apfs_read_ephemeral_objects(struct super_block *sb);
+ 
+diff --git a/inode.c b/inode.c
+index 32706cf..7bfcd06 100644
+--- a/inode.c
++++ b/inode.c
+@@ -1688,7 +1688,7 @@ static int apfs_clean_single_orphan(struct inode *inode)
+ 	return eagain ? -EAGAIN : 0;
+ 
+ fail:
+-	apfs_transaction_abort(sb);
++	apfs_transaction_abort_keep_write(sb);
+ 	return err;
+ }
+ 
+diff --git a/super.c b/super.c
+index bcc353a..35d2d69 100644
+--- a/super.c
++++ b/super.c
+@@ -1637,7 +1637,7 @@ static void apfs_set_trans_buffer_limit(struct super_block *sb)
+ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
+ {
+ 	struct apfs_sb_info *sbi = APFS_SB(sb);
+-	struct inode *root = NULL, *priv = NULL;
++	struct inode *root = NULL;
+ 	int err;
+ 
+ 	/*
+@@ -1722,11 +1722,6 @@ static int apfs_fill_super(struct super_block *sb, void *data, int silent)
+ 	}
+ 
+ 	INIT_WORK(&sbi->s_orphan_cleanup_work, apfs_orphan_cleanup_work);
+-	if (!(sb->s_flags & SB_RDONLY)) {
+-		priv = sbi->s_private_dir;
+-		if (APFS_I(priv)->i_nchildren)
+-			schedule_work(&sbi->s_orphan_cleanup_work);
+-	}
+ 	return 0;
+ 
+ failed_mount:
+diff --git a/transaction.c b/transaction.c
+index e9e13e9..2090f52 100644
+--- a/transaction.c
++++ b/transaction.c
+@@ -977,15 +977,7 @@ static void apfs_force_readonly(struct apfs_nxsb_info *nxi)
+ 	nxi->nx_flags &= ~APFS_READWRITE;
+ }
+ 
+-/**
+- * apfs_transaction_abort - Abort the current transaction
+- * @sb: superblock structure
+- *
+- * Releases the big filesystem lock and clears the in-memory transaction data;
+- * the on-disk changes are irrelevant because the superblock checksum hasn't
+- * been written yet. Leaves the filesystem in read-only state.
+- */
+-void apfs_transaction_abort(struct super_block *sb)
++static void apfs_transaction_abort_common(struct super_block *sb, bool force_ro)
+ {
+ 	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+ 	struct apfs_nx_transaction *nx_trans = &nxi->nx_transaction;
+@@ -993,7 +985,6 @@ void apfs_transaction_abort(struct super_block *sb)
+ 	struct apfs_inode_info *ai, *ai_tmp;
+ 
+ 	if (sb->s_flags & SB_RDONLY) {
+-		/* Transaction already aborted, do nothing */
+ 		ASSERT(list_empty(&nx_trans->t_inodes));
+ 		ASSERT(list_empty(&nx_trans->t_buffers));
+ 		up_write(&nxi->nx_big_sem);
+@@ -1018,11 +1009,8 @@ void apfs_transaction_abort(struct super_block *sb)
+ 		kfree(bhi);
+ 	}
+ 
+-	/*
+-	 * It's not possible to undo in-memory changes from old operations in
+-	 * the aborted transaction. To avoid corruption, never write again.
+-	 */
+-	apfs_force_readonly(nxi);
++	if (force_ro)
++		apfs_force_readonly(nxi);
+ 
+ 	up_write(&nxi->nx_big_sem);
+ 
+@@ -1031,3 +1019,13 @@ void apfs_transaction_abort(struct super_block *sb)
+ 		iput(&ai->vfs_inode);
+ 	}
+ }
++
++void apfs_transaction_abort(struct super_block *sb)
++{
++	apfs_transaction_abort_common(sb, true);
++}
++
++void apfs_transaction_abort_keep_write(struct super_block *sb)
++{
++	apfs_transaction_abort_common(sb, false);
++}

@@ -9,7 +9,7 @@ MOKDIR="${DIR}/mok"
 VENV="${DIR}/venv"
 
 APFS_REPO="${APFS_REPO:-https://github.com/linux-apfs/linux-apfs-rw.git}"
-APFS_VERSION="${APFS_VERSION:-v0.3.20}"
+APFS_VERSION="${APFS_VERSION:-v0.3.21}"
 SIGN_FILE="/usr/src/linux-headers-${KVER}/scripts/sign-file"
 
 if [[ $EUID -ne 0 ]]; then
@@ -46,6 +46,14 @@ if [[ ! -d "${SRCDIR}/.git" ]]; then
 fi
 as_user git -C "$SRCDIR" fetch --quiet --tags
 as_user git -C "$SRCDIR" checkout --quiet "$APFS_VERSION"
+as_user git -C "$SRCDIR" reset --hard --quiet "$APFS_VERSION"
+as_user git -C "$SRCDIR" clean -fdq
+shopt -s nullglob
+for patch in "${DIR}/patches/"*.patch; do
+	echo "    Applying $(basename "$patch")"
+	as_user git -C "$SRCDIR" apply --whitespace=nowarn "$patch"
+done
+shopt -u nullglob
 
 echo "==> Building apfs.ko"
 as_user make -C "$SRCDIR" -j"$(nproc)"
@@ -66,7 +74,22 @@ fi
 echo "==> Installing apfs.ko into ${MODDIR}"
 install -d "${MODDIR}"
 install -m 0644 "${SRCDIR}/apfs.ko" "${MODDIR}/apfs.ko"
+DKMS_DIR="/lib/modules/${KVER}/updates/dkms"
+if [[ -d "$DKMS_DIR" ]]; then
+	echo "==> Also installing over DKMS module at ${DKMS_DIR}"
+	install -m 0644 "${SRCDIR}/apfs.ko" "${DKMS_DIR}/apfs.ko"
+	if command -v zstd >/dev/null && [[ -f "${DKMS_DIR}/apfs.ko.zst" || ! -f "${DKMS_DIR}/apfs.ko" ]]; then
+		zstd -f -q -o "${DKMS_DIR}/apfs.ko.zst" "${DKMS_DIR}/apfs.ko"
+		rm -f "${DKMS_DIR}/apfs.ko"
+	fi
+fi
 depmod -a "${KVER}"
+
+if mountpoint -q /mnt/sandisk 2>/dev/null; then
+	echo "==> /mnt/sandisk is mounted; unload skipped. Remount after: sudo ./apfs-mount.sh umount && sudo rmmod apfs && sudo modprobe apfs && sudo ./apfs-mount.sh mount"
+elif lsmod | grep -q '^apfs '; then
+	rmmod apfs 2>/dev/null || true
+fi
 
 if modprobe apfs 2>/dev/null; then
 	echo "==> apfs module loaded successfully. Setup complete, no reboot needed."
