@@ -71,17 +71,49 @@ if mokutil --sb-state 2>/dev/null | grep -q "SecureBoot enabled"; then
 	"$SIGN_FILE" sha256 "${MOKDIR}/MOK.priv" "${MOKDIR}/MOK.der" "${SRCDIR}/apfs.ko"
 fi
 
-echo "==> Installing apfs.ko into ${MODDIR}"
-install -d "${MODDIR}"
-install -m 0644 "${SRCDIR}/apfs.ko" "${MODDIR}/apfs.ko"
-DKMS_DIR="/lib/modules/${KVER}/updates/dkms"
-if [[ -d "$DKMS_DIR" ]]; then
-	echo "==> Also installing over DKMS module at ${DKMS_DIR}"
-	install -m 0644 "${SRCDIR}/apfs.ko" "${DKMS_DIR}/apfs.ko"
-	if command -v zstd >/dev/null && [[ -f "${DKMS_DIR}/apfs.ko.zst" || ! -f "${DKMS_DIR}/apfs.ko" ]]; then
-		zstd -f -q -o "${DKMS_DIR}/apfs.ko.zst" "${DKMS_DIR}/apfs.ko"
-		rm -f "${DKMS_DIR}/apfs.ko"
+DKMS_NAME="$(sed -n 's/^PACKAGE_NAME="\(.*\)"$/\1/p' "${SRCDIR}/dkms.conf" 2>/dev/null || true)"
+DKMS_VER="$(sed -n 's/^PACKAGE_VERSION="\(.*\)"$/\1/p' "${SRCDIR}/dkms.conf" 2>/dev/null || true)"
+DKMS_SRC="/usr/src/${DKMS_NAME}-${DKMS_VER}"
+
+configure_dkms_signing() {
+	local keydir="/var/lib/dkms/apfs-mok"
+	local dropin="/etc/dkms/framework.conf.d/apfs-signing.conf"
+
+	[[ -f "${MOKDIR}/MOK.priv" ]] || return 0
+
+	install -d -m 0700 "$keydir"
+	install -m 0600 "${MOKDIR}/MOK.priv" "${keydir}/MOK.priv"
+	install -m 0644 "${MOKDIR}/MOK.der" "${keydir}/MOK.der"
+	install -d -m 0755 "$(dirname "$dropin")"
+	cat >"$dropin" <<EOF
+mok_signing_key="${keydir}/MOK.priv"
+mok_certificate="${keydir}/MOK.der"
+EOF
+	echo "    DKMS will sign each rebuild with ${MOKDIR}/MOK.der"
+}
+
+if command -v dkms >/dev/null && [[ -n "$DKMS_NAME" && -n "$DKMS_VER" ]]; then
+	echo "==> Handing the patched source to DKMS as ${DKMS_NAME}/${DKMS_VER}"
+	configure_dkms_signing
+
+	dkms remove -m "$DKMS_NAME" -v "$DKMS_VER" --all >/dev/null 2>&1 || true
+	rm -rf "$DKMS_SRC"
+	install -d -m 0755 "$DKMS_SRC"
+	tar -C "$SRCDIR" --exclude=.git -cf - . | tar -C "$DKMS_SRC" -xf -
+	chown -R root:root "$DKMS_SRC"
+
+	dkms add -m "$DKMS_NAME" -v "$DKMS_VER"
+	dkms build -m "$DKMS_NAME" -v "$DKMS_VER" -k "$KVER"
+	dkms install --force -m "$DKMS_NAME" -v "$DKMS_VER" -k "$KVER"
+
+	if compgen -G "/lib/modules/${KVER}/updates/dkms/apfs.ko*" >/dev/null; then
+		rm -f "${MODDIR}/apfs.ko" "${MODDIR}/apfs.ko.zst"
 	fi
+	echo "==> DKMS owns apfs.ko now, so a kernel upgrade rebuilds it from the patched source"
+else
+	echo "==> Installing apfs.ko into ${MODDIR}"
+	install -d "${MODDIR}"
+	install -m 0644 "${SRCDIR}/apfs.ko" "${MODDIR}/apfs.ko"
 fi
 depmod -a "${KVER}"
 
