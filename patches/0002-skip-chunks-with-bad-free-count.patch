@@ -1,0 +1,25 @@
+diff --git a/spaceman.c b/spaceman.c
+index 31bf439..4831c7f 100644
+--- a/spaceman.c
++++ b/spaceman.c
+@@ -1223,8 +1223,18 @@ static int apfs_chunk_alloc_free(struct super_block *sb,
+ 	if (is_alloc) {
+ 		*bno = apfs_chunk_find_free(sb, bmap, le64_to_cpu(ci->ci_addr));
+ 		if (!*bno) {
+-			apfs_err(sb, "no free blocks in chunk");
+-			err = -EFSCORRUPTED;
++			u64 overcount = le32_to_cpu(ci->ci_free_count) + 1;
++
++			apfs_warn(sb, "chunk at 0x%llx claims %llu free blocks but its bitmap is full; treating it as full",
++				  le64_to_cpu(ci->ci_addr), overcount);
++			ci->ci_free_count = 0;
++			if (sm->sm_free_count > overcount)
++				sm->sm_free_count -= overcount;
++			else
++				sm->sm_free_count = 0;
++			set_buffer_csum(*cib_bh);
++			mark_buffer_dirty(bmap_bh);
++			err = -ENOSPC;
+ 			goto fail;
+ 		}
+ 		apfs_chunk_mark_used(sb, bmap, *bno);

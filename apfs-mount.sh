@@ -241,7 +241,7 @@ do_mount() {
 	local part opts uid gid attempt
 	uid="${SUDO_UID:-0}"
 	gid="${SUDO_GID:-0}"
-	opts="uid=${uid},gid=${gid}"
+	opts="noatime,nodiratime,uid=${uid},gid=${gid}"
 	if [[ "${APFS_READONLY:-0}" == "1" ]]; then
 		opts="ro,${opts}"
 		info "APFS_READONLY=1 set, mounting read-only."
