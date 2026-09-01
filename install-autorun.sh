@@ -31,12 +31,19 @@ render() {
 }
 
 render "${SRC}/sandisk-apfs-mount.service.in" > /etc/systemd/system/sandisk-apfs-mount.service
+render "${SRC}/sandisk-apfs-health.service.in" > /etc/systemd/system/sandisk-apfs-health.service
+install -m 0644 "${SRC}/sandisk-apfs-health.timer" /etc/systemd/system/sandisk-apfs-health.timer
 render "${SRC}/99-sandisk-apfs.rules.in" > /etc/udev/rules.d/99-sandisk-apfs.rules
-chmod 0644 /etc/systemd/system/sandisk-apfs-mount.service /etc/udev/rules.d/99-sandisk-apfs.rules
+chmod 0644 /etc/systemd/system/sandisk-apfs-mount.service \
+	/etc/systemd/system/sandisk-apfs-health.service \
+	/etc/systemd/system/sandisk-apfs-health.timer \
+	/etc/udev/rules.d/99-sandisk-apfs.rules
 
 systemctl daemon-reload
+systemctl enable --now sandisk-apfs-health.timer
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=block --action=add
 
 echo "Installed for uid ${TARGET_UID}, serial ${DRIVE_SERIAL}."
 echo "Watch it with: journalctl -u sandisk-apfs-mount.service -f"
+echo "RW health timer: systemctl status sandisk-apfs-health.timer"

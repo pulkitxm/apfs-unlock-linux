@@ -78,7 +78,8 @@ sudo ./apfs-mount.sh status    # show lock and mount state
 `mount` is idempotent. It also detects a *stale* mount, where the drive
 re-enumerated after an unplug or USB autosuspend and the old mount still looks
 mounted to the kernel while every read returns `EIO`, and clears it before
-remounting.
+remounting. A read-write mount is only reported as successful after a scratch
+file has been written, synced, read back, deleted, and the deletion synced.
 
 The drive stays unlocked until it is physically unplugged, so unmounting does
 not re-lock it.
@@ -90,7 +91,13 @@ sudo ./install-autorun.sh
 ```
 
 Renders a udev rule and a systemd unit from your `.env` and the repo's actual
-path, so plugging the drive in unlocks and mounts it automatically.
+path, so plugging the drive in unlocks and mounts it automatically. It also
+enables a 30-second health timer. If the experimental driver later aborts a
+failed transaction and forces the live mount read-only, the timer detects it,
+cleanly unmounts, and creates a fresh read-write mount. If a shell or app keeps
+the old mount busy, the timer reports the blocking processes and retries until
+they release it; it never kills applications or uses a corruption-prone lazy
+unmount.
 
 ```
 journalctl -u sandisk-apfs-mount.service -f
@@ -99,8 +106,11 @@ journalctl -u sandisk-apfs-mount.service -f
 To remove it:
 
 ```
+sudo systemctl disable --now sandisk-apfs-health.timer
 sudo rm /etc/udev/rules.d/99-sandisk-apfs.rules \
-        /etc/systemd/system/sandisk-apfs-mount.service
+        /etc/systemd/system/sandisk-apfs-mount.service \
+        /etc/systemd/system/sandisk-apfs-health.service \
+        /etc/systemd/system/sandisk-apfs-health.timer
 sudo systemctl daemon-reload && sudo udevadm control --reload-rules
 ```
 

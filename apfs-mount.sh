@@ -12,11 +12,12 @@ info()  { printf '\033[34m[*]\033[0m %s\n' "$*"; }
 
 usage() {
 	cat <<EOF
-Usage: sudo $0 [mount|umount|status]
+Usage: sudo $0 [mount|umount|status|health]
 
   mount    unlock the drive and mount its APFS volume (default)
   umount   unmount the volume
   status   show lock and mount state
+  health   recover an absent, stale, or read-only mount (for systemd)
 
 Configuration is read from ${ENV_FILE}. Copy .env.example to .env and
 fill it in. Set APFS_READONLY=1 to mount read-only.
@@ -74,6 +75,18 @@ is_mounted() { mountpoint -q "$MNT"; }
 
 mounted_source() { findmnt -no SOURCE "$MNT" 2>/dev/null; }
 
+is_readonly_mount() {
+	is_mounted || return 1
+	local opts
+	opts="$(findmnt -no OPTIONS "$MNT" 2>/dev/null || true)"
+	[[ ",${opts}," == *",ro,"* ]]
+}
+
+show_mount_users() {
+	red "Processes or shells keeping ${MNT} busy:"
+	fuser -vm "$MNT" 2>&1 | sed 's/^/    /' || true
+}
+
 is_stale_mount() {
 	is_mounted || return 1
 	local src
@@ -111,8 +124,8 @@ do_umount() {
 		return 0
 	fi
 
-	red "Target is busy. Processes or shells using ${MNT}:"
-	fuser -vm "$MNT" 2>&1 | sed 's/^/    /' || true
+	red "Target is busy."
+	show_mount_users
 	red "Close those (a terminal sitting in ${MNT} counts), then retry."
 	red "Or force it with a lazy unmount: sudo umount -l ${MNT}"
 	return 1
@@ -130,11 +143,49 @@ do_status() {
 		red "STALE mount at ${MNT}: backed by $(mounted_source), which no longer exists."
 		red "Reads will fail with EIO. Fix: sudo $0 umount && sudo $0 mount"
 	elif is_mounted; then
-		green "Mounted at ${MNT} (from $(mounted_source))"
+		if is_readonly_mount; then
+			red "Mounted READ-ONLY at ${MNT} (from $(mounted_source))"
+			red "The APFS driver forced this after a failed write transaction."
+		else
+			green "Mounted READ-WRITE at ${MNT} (from $(mounted_source))"
+		fi
 		df -h "$MNT" | tail -1
 	else
 		info "Not mounted."
 	fi
+}
+
+verify_readwrite() {
+	local probe token actual
+	probe="${MNT}/.apfs-rw-probe-${BASHPID}"
+	token="apfs-rw-probe-${BASHPID}-$(date +%s%N)"
+
+	if is_readonly_mount; then
+		red "The APFS mount flags changed to READ-ONLY before the write probe."
+		return 1
+	fi
+
+	info "Verifying a real write and metadata commit ..."
+	if ! (
+		set -e
+		umask 077
+		printf '%s\n' "$token" > "$probe"
+		sync -f "$probe"
+		[[ "$(<"$probe")" == "$token" ]]
+		rm -f "$probe"
+		sync -f "$MNT"
+	); then
+		rm -f "$probe" 2>/dev/null || true
+		red "APFS write verification failed. The mount is not safely writable."
+		return 1
+	fi
+
+	actual="$(findmnt -no OPTIONS "$MNT" 2>/dev/null || true)"
+	if [[ ",${actual}," == *",ro,"* ]]; then
+		red "The APFS driver switched to READ-ONLY during the write probe."
+		return 1
+	fi
+	green "Write, fsync, read-back, delete, and metadata fsync all passed."
 }
 
 do_mount() {
@@ -240,8 +291,58 @@ do_mount() {
 			exit 1
 		fi
 	else
-		green "Mounted READ-WRITE (experimental). Test with a scratch file first."
+		verify_readwrite || exit 1
+		green "Mounted READ-WRITE (experimental), with a successful write probe."
 	fi
+}
+
+do_health() {
+	local busy_marker="/run/sandisk-apfs-health.busy"
+
+	# A disconnected drive is normal. The udev rule will run the mount service
+	# when it appears, so the periodic health check should stay quiet.
+	if [[ ! -e "$DISK_LINK" ]]; then
+		rm -f "$busy_marker"
+		return 0
+	fi
+	if [[ "${APFS_READONLY:-0}" == "1" ]]; then
+		rm -f "$busy_marker"
+		return 0
+	fi
+
+	clear_stale_mount || true
+	if ! is_mounted; then
+		info "Drive is present but not mounted; mounting it read-write."
+		do_mount
+		return
+	fi
+
+	if ! is_readonly_mount; then
+		rm -f "$busy_marker"
+		return 0
+	fi
+
+	red "APFS changed ${MNT} to READ-ONLY after a failed transaction."
+	info "Attempting a clean automatic unmount and read-write recovery ..."
+	# The failed transaction is already aborted and the filesystem is read-only,
+	# so there are no APFS writes to sync here. A normal unmount is required to
+	# rebuild the driver's in-memory container state; this driver cannot remount
+	# an aborted transaction from ro back to rw in place.
+	if ! umount "$MNT" 2>/dev/null; then
+		if [[ ! -e "$busy_marker" ]]; then
+			red "Automatic recovery is waiting because the mount is busy."
+			show_mount_users
+			red "The health timer will retry automatically. Close those shells/apps."
+			touch "$busy_marker"
+		else
+			info "Mount is still busy; automatic read-write recovery will retry."
+		fi
+		return 75
+	fi
+
+	rm -f "$busy_marker"
+	green "Read-only mount removed; rebuilding a fresh read-write mount."
+	do_mount
 }
 
 case "${1:-mount}" in
@@ -251,9 +352,15 @@ esac
 [[ $EUID -eq 0 ]] || { red "Run as root: sudo $0 ${1:-mount}"; exit 1; }
 load_config
 
+# Serialize udev, timer, and manual invocations. Two simultaneous unlock/mount
+# attempts can otherwise race while the USB disk is re-enumerating.
+exec {LOCK_FD}>/run/lock/sandisk-apfs-mount.lock
+flock "$LOCK_FD"
+
 case "${1:-mount}" in
 	mount)  do_mount  ;;
 	umount|unmount) do_umount ;;
 	status) do_status ;;
+	health) do_health ;;
 	*) usage >&2; exit 1 ;;
 esac

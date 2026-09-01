@@ -1,0 +1,11 @@
+[Unit]
+Description=Check that the SanDisk APFS mount remains read-write
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=sandisk-apfs-health.service
+
+[Install]
+WantedBy=timers.target

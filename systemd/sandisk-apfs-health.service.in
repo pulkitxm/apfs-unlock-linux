@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep SanDisk APFS mount read-write
+After=sandisk-apfs-mount.service
+ConditionPathExists=/dev/disk/by-id/usb-@SERIAL@
+
+[Service]
+Type=oneshot
+Environment=SUDO_UID=@UID@
+Environment=SUDO_GID=@GID@
+ExecStart=@DIR@/apfs-mount.sh health
+TimeoutStartSec=180
+SuccessExitStatus=75
